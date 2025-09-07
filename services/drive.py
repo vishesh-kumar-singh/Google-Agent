@@ -1,0 +1,115 @@
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaIoBaseDownload
+from langchain.schema import Document
+from RAG import RAG
+import io
+import os
+
+# optional parsers
+import docx
+import PyPDF2
+
+
+class GoogleDrive:
+    def __init__(self, credentials):
+        try:
+            self.service = build("drive", "v3", credentials=credentials)
+        except:
+            self.service = None
+            print("Unable to make connection with Drive")
+
+    def search_files(self, query, max_results=10):
+        if not self.service:
+            return []
+        results = self.service.files().list(
+            q=f"name contains '{query}'",
+            pageSize=max_results,
+            fields="files(id, name, mimeType, modifiedTime, owners)"
+        ).execute()
+        return results.get("files", [])
+
+    def download_file(self, file_id, filepath="Temporary/downloaded_file"):
+        try:
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+            file = self.service.files().get(fileId=file_id).execute()
+            mime_type = file.get("mimeType")
+
+            if mime_type.startswith("application/vnd.google-apps"):
+                export_mime = None
+                if mime_type == "application/vnd.google-apps.document":
+                    export_mime = "application/pdf"
+                    filepath += ".pdf"
+                elif mime_type == "application/vnd.google-apps.spreadsheet":
+                    export_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    filepath += ".xlsx"
+                elif mime_type == "application/vnd.google-apps.presentation":
+                    export_mime = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                    filepath += ".pptx"
+
+                if not export_mime:
+                    raise Exception(f"Export not supported for mime type {mime_type}")
+
+                request = self.service.files().export_media(fileId=file_id, mimeType=export_mime)
+            else:
+                # guess extension if possible
+                if mime_type == "application/pdf":
+                    filepath += ".pdf"
+                elif mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+                    filepath += ".docx"
+                elif mime_type == "text/plain":
+                    filepath += ".txt"
+                request = self.service.files().get_media(fileId=file_id)
+
+            fh = io.FileIO(filepath, "wb")
+            downloader = MediaIoBaseDownload(fh, request)
+
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+                if status:
+                    print(f"Download {int(status.progress() * 100)}%.")
+            print("Download complete:", filepath)
+
+            return filepath
+
+        except HttpError as error:
+            print(f"An error occurred: {error}")
+            return None
+
+    def rag_on_file(self, filepaths, query):
+        """Download a file, extract text, and run RAG on it."""
+        docs=[]
+        for filepath in filepaths:
+            if filepath.endswith(".pdf"):
+                with open(filepath, "rb") as f:
+                    reader = PyPDF2.PdfReader(f)
+                    for page in reader.pages:
+                        text += page.extract_text() or ""
+            elif filepath.endswith(".docx"):
+                doc = docx.Document(filepath)
+                for para in doc.paragraphs:
+                    text += para.text + "\n"
+            elif filepath.endswith(".txt"):
+                with open(filepath, "r", encoding="utf-8") as f:
+                    text = f.read()
+            else:
+                return f"Text extraction not supported for {filepath}"
+            docs.append(Document(page_content=text, metadata={"file": filepath}))
+
+        return RAG(docs, query)
+
+    def get_results(self, query, max_results=5):
+        files = self.search_files(query, max_results)
+        if not files:
+            return "No files found."
+        
+        filepaths=[]
+        for i,file in enumerate(files):
+            print(f"Found file: {file['name']} (ID: {file['id']})")
+            path=self.download_file(file['id'], f"Temporary/downloaded_file{i}")
+            filepaths.append(path)
+        
+        context = self.rag_on_file(filepaths, query)
+        
