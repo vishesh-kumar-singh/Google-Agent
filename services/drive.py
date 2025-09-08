@@ -6,9 +6,20 @@ from RAG import RAG
 import io
 import os
 
-# optional parsers
+
 import docx
 import PyPDF2
+
+import re
+
+def clean_text(text):
+    # Remove multiple consecutive newlines
+    text = re.sub(r'\n\s*\n', '\n', text)
+    # Replace line breaks not after punctuation with space
+    text = re.sub(r'(?<![.!?])\n', ' ', text)
+    # Collapse multiple spaces
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
 
 
 class GoogleDrive:
@@ -19,14 +30,23 @@ class GoogleDrive:
             self.service = None
             print("Unable to make connection with Drive")
 
-    def search_files(self, query, max_results=10):
+    def search_files(self, keywords=None, max_results=10):
         if not self.service:
             return []
+
+        if not keywords:
+            return []
+
+        # Build the Drive query with AND conditions
+        query_parts = [f"fullText contains '{kw}'" for kw in keywords]
+        query = " or ".join(query_parts)
+
         results = self.service.files().list(
-            q=f"name contains '{query}'",
+            q=query,
             pageSize=max_results,
             fields="files(id, name, mimeType, modifiedTime, owners)"
         ).execute()
+    
         return results.get("files", [])
 
     def download_file(self, file_id, filepath="Temporary/downloaded_file"):
@@ -68,9 +88,6 @@ class GoogleDrive:
             done = False
             while not done:
                 status, done = downloader.next_chunk()
-                if status:
-                    print(f"Download {int(status.progress() * 100)}%.")
-            print("Download complete:", filepath)
 
             return filepath
 
@@ -80,28 +97,30 @@ class GoogleDrive:
 
     def rag_on_file(self, filepaths, query):
         """Download a file, extract text, and run RAG on it."""
+        print("Fecting resources from Drive")
         docs=[]
+        text=""
         for filepath in filepaths:
             if filepath.endswith(".pdf"):
                 with open(filepath, "rb") as f:
                     reader = PyPDF2.PdfReader(f)
                     for page in reader.pages:
-                        text += page.extract_text() or ""
+                        text += clean_text(page.extract_text()) or ""
             elif filepath.endswith(".docx"):
                 doc = docx.Document(filepath)
                 for para in doc.paragraphs:
-                    text += para.text + "\n"
+                    text += clean_text(para.text) + "\n"
             elif filepath.endswith(".txt"):
                 with open(filepath, "r", encoding="utf-8") as f:
-                    text = f.read()
+                    text = clean_text(f.read())
             else:
                 return f"Text extraction not supported for {filepath}"
             docs.append(Document(page_content=text, metadata={"file": filepath}))
 
         return RAG(docs, query)
 
-    def get_results(self, query, max_results=5):
-        files = self.search_files(query, max_results)
+    def get_results(self, query, keywords, max_results=5):
+        files = self.search_files(keywords, max_results)
         if not files:
             return "No files found."
         
@@ -112,4 +131,6 @@ class GoogleDrive:
             filepaths.append(path)
         
         context = self.rag_on_file(filepaths, query)
+
+        return context
         

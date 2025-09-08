@@ -1,6 +1,24 @@
 from googleapiclient.discovery import build
 import datetime
 from RAG import RAG
+import dateparser
+import pytz
+
+def parse_datetime_to_iso(natural_date: str, timezone="Asia/Kolkata") -> str:
+    
+    tz = pytz.timezone(timezone)
+    dt = dateparser.parse(natural_date, settings={'TIMEZONE': timezone, 'RETURN_AS_TIMEZONE_AWARE': True})
+    
+    if dt is None:
+        raise ValueError(f"Could not parse datetime from '{natural_date}'")
+    
+
+    if dt.tzinfo is None:
+        dt = tz.localize(dt)
+
+    return dt.isoformat()
+
+
 
 
 
@@ -63,8 +81,7 @@ class GoogleCalendar:
             for e in events
         ]
     
-    
-    # Can do if got time
+
     def create_event(self, summary, start_time, end_time, timezone="UTC"):
         event = {
             "summary": summary,
@@ -72,3 +89,11 @@ class GoogleCalendar:
             "end": {"dateTime": end_time, "timeZone": timezone},
         }
         return self.service.events().insert(calendarId="primary", body=event).execute()
+
+
+
+    def delete_event(self, summary, days_ahead=30):
+        events = self.find_event_by_summary(summary, days_ahead)
+        if not events:
+            return None
+        return self.delete_event(events[0]["id"])

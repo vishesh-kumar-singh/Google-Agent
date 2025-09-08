@@ -1,6 +1,9 @@
 import dotenv
 dotenv.load_dotenv()
 
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 from agent import Answer
 
 print("J.A.R.V.I.S. is at your service sir! Type 'exit' or 'quit' to end the session.")
