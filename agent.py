@@ -2,6 +2,9 @@ from OAuth import Authenticate
 from services.calender import GoogleCalendar
 from services.mail import Gmail
 from services.drive import GoogleDrive
+from services.calender import parse_datetime_to_iso
+from services.calender import parse_datetime_to_iso
+from services.web_search import WebSearch, scrape_page
 from langchain_core.messages import HumanMessage
 from langchain.chat_models import init_chat_model
 from mem0 import MemoryClient
@@ -9,8 +12,6 @@ from langgraph.graph import START, MessagesState, StateGraph
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from typing import List, Dict
 from langchain_core.tools import tool
-from services.calender import parse_datetime_to_iso
-from services.calender import parse_datetime_to_iso
 from datetime import datetime, timedelta
 import pytz
 
@@ -93,6 +94,15 @@ def calendar_delete(summary: str, days_ahead: int = 30):
     """Delete an event by summary text (first match)"""
     return calendar_service.delete_event(summary, days_ahead=days_ahead)
 
+@tool
+def web_search(query: str):
+    """Performs websearch and returns top 5 page title, content and url"""
+    return WebSearch(query=query)
+
+@tool
+def scrapper(url: str):
+    """Scrapes the whole webpage for a given url, can be used with a web search tool to get url then scrape whole page if required"""
+    return scrape_page(url=url)
 
 tools = [
     gmail_send,
@@ -103,6 +113,8 @@ tools = [
     calendar_upcoming,
     calendar_create,
     calendar_delete,
+    web_search,
+    scrape_page
 ]
 
 
@@ -192,11 +204,14 @@ def call_model_main(state: MessagesState, config):
     user_query = state["messages"][-1].content
     user_id = config["configurable"]["thread_id"]
 
+    print("Retrieving Context...", end="\r", flush=True)
     memory_context = retrieve_context(user_query, user_id)
     full_prompt = prompt_template.invoke({"messages": memory_context})
 
+    print("Executing Tools...", end="\r", flush=True)
     response = model_with_tools.invoke(full_prompt)
 
+    print("Summarising results...", end="\r", flush=True)
     if response.tool_calls:  
         results = []
         for tool_call in response.tool_calls:
